@@ -27,6 +27,9 @@ def decode_segmap(label_mask, dataset, plot=False):
     elif dataset == 'cityscapes':
         n_classes = 19
         label_colours = get_cityscapes_labels()
+    elif dataset == 'semantic_body':
+        n_classes = 11
+        label_colours = get_sbody_labels()
     else:
         raise NotImplementedError
 
@@ -64,6 +67,24 @@ def encode_segmap(mask):
     label_mask = label_mask.astype(int)
     return label_mask
 
+def get_sbody_labels():
+    """Load the mapping that associates semantic body classes with label colors
+    Returns:
+        np.ndarray with dimensions (11, 3)
+    """
+    return np.array([
+        [0, 0, 0],
+        [2, 100, 200],
+        [4, 138, 4],
+        [202, 2, 4],
+        [247, 250, 49],
+        [250, 112, 66],
+        [60, 65, 74],
+        [198, 127, 57],
+        [121, 1, 140],
+        [162, 224, 19],
+        [170, 128, 244]]
+    )
 
 def get_cityscapes_labels():
     return np.array([
