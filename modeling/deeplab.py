@@ -5,11 +5,14 @@ from modeling.sync_batchnorm.batchnorm import SynchronizedBatchNorm2d
 from modeling.aspp import build_aspp
 from modeling.decoder import build_decoder
 from modeling.backbone import build_backbone
+from modeling.maskiou import build_maskiou
 
 class DeepLab(nn.Module):
+
     def __init__(self, backbone='resnet', output_stride=16, num_classes=21,
-                 sync_bn=True, freeze_bn=False):
+                 sync_bn=True, freeze_bn=False, use_iou=True):
         super(DeepLab, self).__init__()
+        self.use_iou = use_iou
         if backbone == 'drn':
             output_stride = 8
 
@@ -21,6 +24,8 @@ class DeepLab(nn.Module):
         self.backbone = build_backbone(backbone, output_stride, BatchNorm)
         self.aspp = build_aspp(backbone, output_stride, BatchNorm)
         self.decoder = build_decoder(num_classes, backbone, BatchNorm)
+        if self.use_iou:
+            self.maskiou = build_maskiou(num_classes)
 
         if freeze_bn:
             self.freeze_bn()
@@ -28,10 +33,18 @@ class DeepLab(nn.Module):
     def forward(self, input):
         x, low_level_feat = self.backbone(input)
         x = self.aspp(x)
-        x = self.decoder(x, low_level_feat)
+        x, low_level_feat = self.decoder(x, low_level_feat)
+
+        # iou
+        if self.use_iou:
+            x_iou = self.maskiou(x, low_level_feat)
+        else:
+            x_iou = None
+        # B, C, 1
+
         x = F.interpolate(x, size=input.size()[2:], mode='bilinear', align_corners=True)
 
-        return x
+        return x, x_iou
 
     def freeze_bn(self):
         for m in self.modules():

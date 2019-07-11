@@ -8,6 +8,7 @@ from dataloaders import make_data_loader
 from modeling.sync_batchnorm.replicate import patch_replication_callback
 from modeling.deeplab import *
 from utils.loss import SegmentationLosses
+from utils.iou import MaskIoUComputation
 from utils.calculate_weights import calculate_weigths_labels
 from utils.lr_scheduler import LR_Scheduler
 from utils.saver import Saver
@@ -34,7 +35,8 @@ class Trainer(object):
                         backbone=args.backbone,
                         output_stride=args.out_stride,
                         sync_bn=args.sync_bn,
-                        freeze_bn=args.freeze_bn)
+                        freeze_bn=args.freeze_bn,
+                        use_iou=args.use_maskiou)
 
         train_params = [{'params': model.get_1x_lr_params(), 'lr': args.lr},
                         {'params': model.get_10x_lr_params(), 'lr': args.lr * 10}]
@@ -55,6 +57,10 @@ class Trainer(object):
         else:
             weight = None
         self.criterion = SegmentationLosses(weight=weight, cuda=args.cuda).build_loss(mode=args.loss_type)
+        if args.use_maskiou:
+            self.compute_iou = MaskIoUComputation()
+            self.criterion_iou = SegmentationLosses(weight=weight, cuda=args.cuda).build_loss('iou')
+
         self.model, self.optimizer = model, optimizer
         
         # Define Evaluator
@@ -77,9 +83,9 @@ class Trainer(object):
             checkpoint = torch.load(args.resume)
             args.start_epoch = checkpoint['epoch']
             if args.cuda:
-                self.model.module.load_state_dict(checkpoint['state_dict'])
+                self.model.module.load_state_dict(checkpoint['state_dict'], strict=False)
             else:
-                self.model.load_state_dict(checkpoint['state_dict'])
+                self.model.load_state_dict(checkpoint['state_dict'], strict=False)
             if not args.ft:
                 self.optimizer.load_state_dict(checkpoint['optimizer'])
             self.best_pred = checkpoint['best_pred']
@@ -92,6 +98,7 @@ class Trainer(object):
 
     def training(self, epoch):
         train_loss = 0.0
+        train_loss_iou = 0.0
         self.model.train()
         tbar = tqdm(self.train_loader)
         num_img_tr = len(self.train_loader)
@@ -101,13 +108,28 @@ class Trainer(object):
                 image, target = image.cuda(), target.cuda()
             self.scheduler(self.optimizer, i, epoch, self.best_pred)
             self.optimizer.zero_grad()
-            output = self.model(image)
+            output, output_iou = self.model(image)
+
             loss = self.criterion(output, target)
-            loss.backward()
+            # loss.backward(retain_graph=True)
+
+            if self.args.use_maskiou:
+                gt_iou = self.compute_iou.compute(output, target)
+                loss_iou = self.criterion_iou(output_iou, gt_iou)
+                # loss_iou.backward()
+
+            loss_dict = {}
+            loss_dict['predloss'] = loss
+            if loss.mean() < 0.01:
+                loss_dict['iouloss'] = loss_iou
+            losses = sum(loss for loss in loss_dict.values())
+            losses.backward()
+
             self.optimizer.step()
             train_loss += loss.item()
-            tbar.set_description('Train loss: %.3f' % (train_loss / (i + 1)))
-            self.writer.add_scalar('train/total_loss_iter', loss.item(), i + num_img_tr * epoch)
+            train_loss_iou += loss_iou.item()
+            tbar.set_description('Train loss: %.3f, IoU loss: %.5f' % (train_loss / (i + 1), (train_loss_iou / (i + 1))))
+            self.writer.add_scalar('train/total_loss_iter', losses.item(), i + num_img_tr * epoch)
 
             # Show 10 * 3 inference results each epoch
             if i % (num_img_tr // 10) == 0:
@@ -115,8 +137,9 @@ class Trainer(object):
                 self.summary.visualize_image(self.writer, self.args.dataset, image, target, output, global_step)
 
         self.writer.add_scalar('train/total_loss_epoch', train_loss, epoch)
+        # self.writer.add_scalar('train/total_IoU_loss_epoch', train_loss_iou, epoch)
         print('[Epoch: %d, numImages: %5d]' % (epoch, i * self.args.batch_size + image.data.shape[0]))
-        print('Loss: %.3f' % train_loss)
+        print('Loss: %.3f, IoU Loss: %.5f' % (train_loss, train_loss_iou))
 
         if self.args.no_val:
             # save checkpoint every epoch
@@ -134,15 +157,23 @@ class Trainer(object):
         self.evaluator.reset()
         tbar = tqdm(self.val_loader, desc='\r')
         test_loss = 0.0
+        test_loss_iou = 0.0
         for i, sample in enumerate(tbar):
             image, target = sample['image'], sample['label']
             if self.args.cuda:
                 image, target = image.cuda(), target.cuda()
             with torch.no_grad():
-                output = self.model(image)
+                # output = self.model(image)
+                output, output_iou = self.model(image)
+
             loss = self.criterion(output, target)
+            if self.args.use_maskiou:
+                gt_iou = self.compute_iou.compute(output, target)
+                loss_iou = self.criterion_iou(output_iou, gt_iou)
+
             test_loss += loss.item()
-            tbar.set_description('Test loss: %.3f' % (test_loss / (i + 1)))
+            test_loss_iou += loss_iou.item()
+            tbar.set_description('Test loss: %.3f, IoU loss: %.5f' % (test_loss / (i + 1), (test_loss_iou / (i+1))))
             pred = output.data.cpu().numpy()
             target = target.cpu().numpy()
             pred = np.argmax(pred, axis=1)
@@ -162,7 +193,7 @@ class Trainer(object):
         print('Validation:')
         print('[Epoch: %d, numImages: %5d]' % (epoch, i * self.args.batch_size + image.data.shape[0]))
         print("Acc:{}, Acc_class:{}, mIoU:{}, fwIoU: {}".format(Acc, Acc_class, mIoU, FWIoU))
-        print('Loss: %.3f' % test_loss)
+        print('Loss: %.3f, IoU Loss: %.5f' % (test_loss, test_loss_iou))
 
         new_pred = mIoU
         if new_pred > self.best_pred:
@@ -187,6 +218,8 @@ def main():
                         help='dataset name (default: pascal)')
     parser.add_argument('--use-sbd', action='store_true', default=True,
                         help='whether to use SBD dataset (default: True)')
+    parser.add_argument('--use-maskiou', action='store_true', default=True,
+                        help='whether train with mask_iou_head (default: True)')
     parser.add_argument('--workers', type=int, default=4,
                         metavar='N', help='dataloader threads')
     parser.add_argument('--base-size', type=int, default=513,
@@ -200,6 +233,7 @@ def main():
     parser.add_argument('--loss-type', type=str, default='ce',
                         choices=['ce', 'focal'],
                         help='loss func type (default: ce)')
+
     # training hyper params
     parser.add_argument('--epochs', type=int, default=None, metavar='N',
                         help='number of epochs to train (default: auto)')

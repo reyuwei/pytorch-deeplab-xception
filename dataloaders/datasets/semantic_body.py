@@ -66,6 +66,9 @@ class SBODYSegmentation(Dataset):
                 initial_mask.append(items[1].replace("\n", ""))
                 gt_semantic_mask.append(items[2].replace("\n", ""))
 
+                # if len(image) == 40:
+                #     break
+
         self.imagelist = image
         self.initialmsklist = initial_mask
         self.gtsemanticmsklist = gt_semantic_mask

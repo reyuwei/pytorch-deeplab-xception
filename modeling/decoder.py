@@ -40,7 +40,7 @@ class Decoder(nn.Module):
         x = torch.cat((x, low_level_feat), dim=1)
         x = self.last_conv(x)
 
-        return x
+        return x, low_level_feat
 
     def _init_weight(self):
         for m in self.modules():

@@ -5,7 +5,10 @@ class SegmentationLosses(object):
     def __init__(self, weight=None, size_average=True, batch_average=True, ignore_index=255, cuda=False):
         self.ignore_index = ignore_index
         self.weight = weight
-        self.size_average = size_average
+        if size_average:
+            self.reduction = 'mean'
+        else:
+            self.reduction = 'sum'
         self.batch_average = batch_average
         self.cuda = cuda
 
@@ -15,13 +18,27 @@ class SegmentationLosses(object):
             return self.CrossEntropyLoss
         elif mode == 'focal':
             return self.FocalLoss
+        elif mode == 'iou':
+            return self.MaskIoULoss
         else:
             raise NotImplementedError
+
+    def MaskIoULoss(self, iou, target):
+        n, c = iou.size()
+        criterion = nn.MSELoss()
+        if self.cuda:
+            criterion = criterion.cuda()
+
+        loss = criterion(iou, target)
+        if self.batch_average:
+            loss /= n
+
+        return loss
 
     def CrossEntropyLoss(self, logit, target):
         n, c, h, w = logit.size()
         criterion = nn.CrossEntropyLoss(weight=self.weight, ignore_index=self.ignore_index,
-                                        size_average=self.size_average)
+                                        reduction=self.reduction)
         if self.cuda:
             criterion = criterion.cuda()
 
@@ -35,7 +52,7 @@ class SegmentationLosses(object):
     def FocalLoss(self, logit, target, gamma=2, alpha=0.5):
         n, c, h, w = logit.size()
         criterion = nn.CrossEntropyLoss(weight=self.weight, ignore_index=self.ignore_index,
-                                        size_average=self.size_average)
+                                        reduction=self.reduction)
         if self.cuda:
             criterion = criterion.cuda()
 
