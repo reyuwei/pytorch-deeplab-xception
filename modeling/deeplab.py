@@ -25,7 +25,7 @@ class DeepLab(nn.Module):
         self.aspp = build_aspp(backbone, output_stride, BatchNorm)
         self.decoder = build_decoder(num_classes, backbone, BatchNorm)
         if self.use_iou:
-            self.maskiou = build_maskiou(num_classes)
+            self.maskiou = build_maskiou(num_classes, BatchNorm)
 
         if freeze_bn:
             self.freeze_bn()
@@ -75,10 +75,9 @@ class DeepLab(nn.Module):
 
 
 if __name__ == "__main__":
-    model = DeepLab(backbone='mobilenet', output_stride=16)
+    model = DeepLab(backbone='resnet', output_stride=16)
     model.eval()
-    input = torch.rand(1, 3, 513, 513)
+    input = torch.rand(1, 3, 517, 517)
     output = model(input)
-    print(output.size())
 
 

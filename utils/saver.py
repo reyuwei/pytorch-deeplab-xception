@@ -3,6 +3,9 @@ import shutil
 import torch
 from collections import OrderedDict
 import glob
+import cv2
+import numpy as np
+from dataloaders.utils import decode_segmap
 
 class Saver(object):
 
@@ -15,6 +18,47 @@ class Saver(object):
         self.experiment_dir = os.path.join(self.directory, 'experiment_{}'.format(str(run_id)))
         if not os.path.exists(self.experiment_dir):
             os.makedirs(self.experiment_dir)
+
+    def save_demo_result(self, pred_dict, image_list, root_folder):
+        predictions = pred_dict['images']
+        ious = pred_dict['ious']
+        imgfolder = os.path.join(root_folder, "mask//mask_refine_network")
+        if not os.path.exists(imgfolder):
+            os.mkdir(imgfolder)
+        for predi in range(len(predictions)):
+            imgname = os.path.join(imgfolder, image_list[predi])
+            segmap = decode_segmap(predictions[predi], dataset='semantic_body')
+            cv2.imwrite(imgname, segmap)
+            scorename, _ = os.path.splitext(imgname)
+            np.savetxt(scorename + ".txt", ious[predi], fmt="%.6f")
+
+    def save_images(self, pred_dict):
+        predictions = pred_dict['images']
+        ious = pred_dict['ious']
+        targets = pred_dict['targets']
+        inputs = pred_dict['inputs']
+        assert(len(predictions) == len(ious))
+        imgfolder = self.directory + "//test/"
+        if not os.path.exists(imgfolder):
+            os.mkdir(imgfolder)
+        for predi in range(len(predictions)):
+            str_iou = "{:.05f}".format(ious[predi])
+            imgname = os.path.join(imgfolder, str(predi) + "_" + str(str_iou) + ".png")
+            segmap = decode_segmap(predictions[predi], dataset='semantic_body')
+            segmap_target = decode_segmap(targets[predi], dataset='semantic_body')
+
+            img_tmp = np.transpose(inputs[predi], axes=[1, 2, 0])
+            img_tmp *= (0.229, 0.224, 0.225)
+            img_tmp += (0.485, 0.456, 0.406)
+            img_tmp *= 255.0
+            img_tmp = img_tmp.astype(np.uint8)
+
+            save = np.zeros((segmap.shape[0], segmap.shape[1]*3, 3), dtype=np.uint8)
+            save[0:segmap.shape[0], 0:segmap.shape[1], :] = segmap
+            save[0:segmap.shape[0], segmap.shape[1]:segmap.shape[1]*2, :] = segmap_target
+            save[0:segmap.shape[0], segmap.shape[1]*2:, :] = img_tmp
+
+            cv2.imwrite(imgname, save)
 
     def save_checkpoint(self, state, is_best, filename='checkpoint.pth.tar'):
         """Saves checkpoint to disk"""
@@ -40,6 +84,8 @@ class Saver(object):
                     shutil.copyfile(filename, os.path.join(self.directory, 'model_best.pth.tar'))
             else:
                 shutil.copyfile(filename, os.path.join(self.directory, 'model_best.pth.tar'))
+
+
 
     def save_experiment_config(self):
         logfile = os.path.join(self.experiment_dir, 'parameters.txt')
