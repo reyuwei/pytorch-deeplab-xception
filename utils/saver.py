@@ -22,15 +22,24 @@ class Saver(object):
     def save_demo_result(self, pred_dict, image_list, root_folder):
         predictions = pred_dict['images']
         ious = pred_dict['ious']
+        all_idx = np.arange(11)
+
         imgfolder = os.path.join(root_folder, "mask//mask_refine_network")
+        initmaskfolder = os.path.join(root_folder, "mask")
         if not os.path.exists(imgfolder):
             os.mkdir(imgfolder)
         for predi in range(len(predictions)):
+            pred_labels = np.unique(predictions[predi])
+            iou = ious[predi]
+            iou[~np.isin(all_idx, pred_labels)] = -1
+            initmask = cv2.imread(os.path.join(initmaskfolder, image_list[predi]))
+            h, w, c = initmask.shape
             imgname = os.path.join(imgfolder, image_list[predi])
-            segmap = decode_segmap(predictions[predi], dataset='semantic_body')
-            cv2.imwrite(imgname, segmap)
+            segmap, segmap_gray = decode_segmap(predictions[predi], dataset='semantic_body')
+            segmap_gray = cv2.resize(segmap_gray, (w, h), interpolation=cv2.INTER_NEAREST)
+            cv2.imwrite(imgname, segmap_gray)
             scorename, _ = os.path.splitext(imgname)
-            np.savetxt(scorename + ".txt", ious[predi], fmt="%.6f")
+            np.savetxt(scorename + ".txt", iou[1:], fmt="%.6f")
 
     def save_images(self, pred_dict):
         predictions = pred_dict['images']
